@@ -42,7 +42,7 @@ def get_loader(
     mixup=None,
     data_path='./beton',
 ):
-    mode_name = MODE_DICT[dataset] if mode != 'train' else mode
+    mode_name = MODE_DICT[dataset] if not mode else mode
     os_cache = OS_CACHED_DICT[dataset]
 
     if data_resolution is None:
@@ -56,7 +56,6 @@ def get_loader(
     beton_path = os.path.join(
         data_path,
         DATA_DICT[dataset],
-        'ffcv',
         mode_name,
         real + f'{mode_name}_{data_resolution}' + sub_sampled + '.beton',
     )

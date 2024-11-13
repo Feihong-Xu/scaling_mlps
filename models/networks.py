@@ -18,6 +18,8 @@ ACT = {
     'relu': nn.ReLU()
 }
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
 class StandardMLP(nn.Module):
     def __init__(self, dim_in, dim_out, widths):
@@ -103,7 +105,7 @@ class BottleneckMLP(nn.Module):
 
         params = {
             k: v
-            for k, v in torch.load(weight_path).items()
+            for k, v in torch.load(weight_path, map_location=device).items()
         }
 
         # Load pre-trained parameters
