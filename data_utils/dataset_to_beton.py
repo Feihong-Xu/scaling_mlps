@@ -7,7 +7,7 @@ import torchvision
 from ffcv.fields import BytesField, IntField, RGBImageField
 from ffcv.writer import DatasetWriter
 
-class CIFAR10C(torch.utils.dataDataset):
+class CIFAR10C(torch.utils.data.Dataset):
     def __init__(self, data_dir, corruption, stage='test', transform=None, target_transform=None):
         self.data_dir = data_dir
         self.corruption = corruption
@@ -27,6 +27,10 @@ class CIFAR10C(torch.utils.dataDataset):
             image = self.transform(image)
         if self.target_transform:
             label = self.target_transform(label)
+        if not isinstance(image, np.ndarray):
+            raise TypeError(f"Expected numpy array, got {type(image)}")
+        if image.dtype != np.uint8:
+            image = image.astype(np.uint8)
         return image, label
 
 
@@ -41,7 +45,7 @@ def get_dataset(dataset_name, mode, data_path, oo=None):
             )
         elif mode == "ood":
             return CIFAR10C(
-                data_dir="../nn/data/CIFAR10C",
+                data_dir="tmp/CIFAR10C",
                 corruption=oo,
                 stage="test",
                 transform=None,
@@ -59,29 +63,42 @@ def get_dataset(dataset_name, mode, data_path, oo=None):
 
 
 def create_beton(args):
-    dataset = get_dataset(args.dataset_name, args.mode, args.data_path, args.oo)
+    if args.mode == "ood":
+        oos = [i.split("/")[-1].split(".")[0] for i in os.listdir("tmp/CIFAR10C") if i.split("/")[-1].split(".")[0] != "labels"]
+        for oo in oos:
+            dataset = get_dataset(args.dataset_name, args.mode, args.data_path, oo)
+            write_path = os.path.join(
+                args.write_path, args.dataset_name, args.mode, oo, f"{args.mode}_{oo}_{args.res}.beton"
+            )
+            os.makedirs(os.path.dirname(write_path), exist_ok=True)
 
-    if args.oo is not None:
-        write_path = os.path.join(
-            args.write_path, args.dataset_name, args.mode, args.oo, f"{args.mode}_{args.oo}_{args.res}.beton"
-        )
+            writer = DatasetWriter(
+                write_path,
+                {
+                    "image": RGBImageField(write_mode="smart", max_resolution=args.res),
+                    "label": IntField(),
+                },
+                num_workers=args.num_workers,
+            )
+
+            writer.from_indexed_dataset(dataset, chunksize=100)
     else:
         write_path = os.path.join(
             args.write_path, args.dataset_name, args.mode, f"{args.mode}_{args.res}.beton"
         )
 
-    os.makedirs(os.path.dirname(write_path), exist_ok=True)
+        os.makedirs(os.path.dirname(write_path), exist_ok=True)
 
-    writer = DatasetWriter(
-        write_path,
-        {
-            "image": RGBImageField(write_mode="smart", max_resolution=args.res),
-            "label": IntField(),
-        },
-        num_workers=args.num_workers,
-    )
+        writer = DatasetWriter(
+            write_path,
+            {
+                "image": RGBImageField(write_mode="smart", max_resolution=args.res),
+                "label": IntField(),
+            },
+            num_workers=args.num_workers,
+        )
 
-    writer.from_indexed_dataset(dataset, chunksize=100)
+        writer.from_indexed_dataset(dataset, chunksize=100)
 
 
 if __name__ == "__main__":
@@ -94,8 +111,6 @@ if __name__ == "__main__":
         help="path to dataset if data is given in a hierarchical subfolder structure.",
     )
     parser.add_argument("--mode", type=str, default="train", help="train or test")
-    parser.add_argument(
-        "--oo", type=str, default=None, help="corruption type for OOD dataset"
     parser.add_argument("--res", type=int, default=32, help="resolution of images")
     parser.add_argument(
         "--write_path",

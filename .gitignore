@@ -4,3 +4,4 @@ checkpoints*
 out*
 scratch*
 .DS_Store
+tmp*
