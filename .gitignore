@@ -1,3 +1,6 @@
 beton
-checkpoints
+checkpoints*
 *_pycache_*
+out*
+scratch*
+.DS_Store

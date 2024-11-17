@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from torch import nn
 import torch
@@ -22,10 +23,12 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class StandardMLP(nn.Module):
-    def __init__(self, dim_in, dim_out, widths):
+    def __init__(self, dim_in, dim_out, widths, norm='layer', act='relu'):
         super(StandardMLP, self).__init__()
         self.dim_in = dim_in
         self.dim_out = dim_out
+        self.norm = NORMS[norm]
+        self.act = ACT[act]
         self.widths = widths
         self.linear_in = nn.Linear(self.dim_in, self.widths[0])
         self.linear_out = nn.Linear(self.widths[-1], self.dim_out)
@@ -33,7 +36,7 @@ class StandardMLP(nn.Module):
         self.layer_norms = []
         for i in range(len(self.widths) - 1):
             self.layers.append(nn.Linear(self.widths[i], self.widths[i + 1]))
-            self.layer_norms.append(nn.LayerNorm(widths[i + 1]))
+            self.layer_norms.append(self.norm(widths[i + 1]))
 
         self.layers = nn.ModuleList(self.layers)
         self.layernorms = nn.ModuleList(self.layer_norms)
@@ -42,7 +45,7 @@ class StandardMLP(nn.Module):
         z = self.linear_in(x)
         for layer, norm in zip(self.layers, self.layer_norms):
             z = norm(z)
-            z = nn.GELU()(z)
+            z = self.act(z)
             z = layer(z)
 
         out = self.linear_out(z)
@@ -51,13 +54,17 @@ class StandardMLP(nn.Module):
 
 
 class BottleneckMLP(nn.Module):
-    def __init__(self, dim_in, dim_out, block_dims, norm='layer', checkpoint=None, name=None):
+    def __init__(
+        self, dim_in, dim_out, block_dims, norm='layer', 
+        checkpoint=None, name=None, checkpoint_path='./checkpoints/'
+    ):
         super(BottleneckMLP, self).__init__()
         self.dim_in = dim_in
         self.dim_out = dim_out
         self.block_dims = block_dims
         self.norm = NORMS[norm]
         self.checkpoint = checkpoint
+        self.checkpoint_path = checkpoint_path
 
         self.name = name
         self.linear_in = nn.Linear(self.dim_in, self.block_dims[0][1])
@@ -74,7 +81,7 @@ class BottleneckMLP(nn.Module):
         self.layernorms = nn.ModuleList(layernorms)
 
         if self.checkpoint is not None:
-            self.load(self.checkpoint)
+            self.load()
 
     def forward(self, x):
         x = self.linear_in(x)
@@ -86,31 +93,30 @@ class BottleneckMLP(nn.Module):
 
         return out
 
-    def load(self, name, checkpoint_path='./checkpoints/'):
-        #if name == True:
-            # This simply assumes Imagenet21 pre-trained weights at the latest epoch available, no fine-tuning
-        #    name = default_checkpoints[self.name]
-        #elif name in ['cifar10', 'cifar100', 'imagenet']:
-            # This loads the optimal fine-tuned weights for that dataset
-        #    name = default_checkpoints[self.name + '_' + name]
-        #else:
-            # This assumes a full path, e.g. also specifying which epoch etc
-        #    name = self.name + '_' + name
-        name = self.name + '_' + name
-        name = default_checkpoints[name]
-        weight_path, config_path = download(name, checkpoint_path)
+    def load(self, name='in21k_cifar10'):
+        """
+        Load the model weights from a checkpoint.
+        """
+        checkpoint_dir = Path(self.checkpoint_path)
+        checkpoint_name = f"{self.name}_{name}"
+        config_path = checkpoint_dir / checkpoint_name / "config.txt"
+        weight_path = checkpoint_dir / checkpoint_name / f"epoch_{self.checkpoint}"
 
-        with open(config_path, 'r') as f:
-            self.config = json.load(f)
+        # Load config
+        if config_path.exists():
+            with open(config_path, 'r') as f:
+                self.config = json.load(f)
+        else:
+            raise FileNotFoundError(f"Config file not found at {config_path}")
 
-        params = {
-            k: v
-            for k, v in torch.load(weight_path, map_location=device).items()
-        }
-
-        # Load pre-trained parameters
-        print('Load_state output', self.load_state_dict(params, strict=False))
-
+        # Load weights
+        if weight_path.exists():
+            print(f"Loading weights from {weight_path}")
+            params = torch.load(weight_path, map_location='cpu')
+            missing_keys, unexpected_keys = self.load_state_dict(params, strict=False)
+            print(f"Loaded checkpoint with missing keys: {missing_keys} and unexpected keys: {unexpected_keys}")
+        else:
+            raise FileNotFoundError(f"Weight file not found at {weight_path}")
 
 class BottleneckBlock(nn.Module):
     def __init__(self, thin, wide, act=nn.GELU()):
@@ -138,16 +144,18 @@ def B_12_Wi_512(dim_in, dim_out, checkpoint=None):
                          name='B_' + str(len(block_dims)) + '-Wi_' + str(block_dims[0][1]) + '_res_' + str(int(np.sqrt(dim_in/3))))
 
 
-def B_6_Wi_1024(dim_in, dim_out, checkpoint=None):
+def B_6_Wi_1024(dim_in, dim_out, checkpoint=None, checkpoint_path='./checkpoints/'):
     block_dims = [[4 * 1024, 1024] for _ in range(6)]
     return BottleneckMLP(dim_in=dim_in, dim_out=dim_out, norm='layer', block_dims=block_dims, checkpoint=checkpoint,
-                         name='B_' + str(len(block_dims)) + '-Wi_' + str(block_dims[0][1]) + '_res_' + str(int(np.sqrt(dim_in/3))))
+                            checkpoint_path=checkpoint_path,
+                            name='B_' + str(len(block_dims)) + '-Wi_' + str(block_dims[0][1]) + '_res_' + str(int(np.sqrt(dim_in/3))))
 
 
-def B_6_Wi_512(dim_in, dim_out, checkpoint=None):
+def B_6_Wi_512(dim_in, dim_out, checkpoint=None, checkpoint_path='./checkpoints/'):
     block_dims = [[4 * 512, 512] for _ in range(6)]
     return BottleneckMLP(dim_in=dim_in, dim_out=dim_out, norm='layer', block_dims=block_dims, checkpoint=checkpoint,
-                         name='B_' + str(len(block_dims)) + '-Wi_' + str(block_dims[0][1]) + '_res_' + str(int(np.sqrt(dim_in/3))))
+                            checkpoint_path=checkpoint_path,
+                            name='B_' + str(len(block_dims)) + '-Wi_' + str(block_dims[0][1]) + '_res_' + str(int(np.sqrt(dim_in/3))))
 
 
 model_list = {
@@ -158,5 +166,9 @@ model_list = {
 }
 
 
-def get_model(architecture, checkpoint, resolution, num_classes):
-    return model_list[architecture](dim_in=resolution**2 * 3, dim_out=num_classes, checkpoint=checkpoint)
+def get_model(architecture, checkpoint, resolution, num_classes, checkpoint_path='./checkpoints/'):
+    return model_list[architecture](
+        dim_in=resolution**2 * 3, dim_out=num_classes, 
+        checkpoint=checkpoint, 
+        checkpoint_path=checkpoint_path
+    )

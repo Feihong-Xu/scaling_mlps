@@ -1,19 +1,53 @@
 import argparse
 import os
 
+import numpy as np
+import torch
 import torchvision
 from ffcv.fields import BytesField, IntField, RGBImageField
 from ffcv.writer import DatasetWriter
 
+class CIFAR10C(torch.utils.dataDataset):
+    def __init__(self, data_dir, corruption, stage='test', transform=None, target_transform=None):
+        self.data_dir = data_dir
+        self.corruption = corruption
+        self.stage = stage
+        self.transform = transform
+        self.target_transform = target_transform
+        self.imgs = np.load(os.path.join(data_dir, f'{corruption}.npy'))
+        self.img_labels = np.load(os.path.join(data_dir, 'labels.npy'))
 
-def get_dataset(dataset_name, mode, data_path):
+    def __len__(self):
+        return len(self.img_labels)
+
+    def __getitem__(self, idx):
+        image = self.imgs[idx]
+        label = self.img_labels[idx]
+        if self.transform:
+            image = self.transform(image)
+        if self.target_transform:
+            label = self.target_transform(label)
+        return image, label
+
+
+def get_dataset(dataset_name, mode, data_path, oo=None):
     if data_path is not None:
         return torchvision.datasets.ImageFolder(root=data_path, transform=None)
 
     if dataset_name == "cifar10":
-        return torchvision.datasets.CIFAR10(
-            root="/tmp", train=mode == "train", download=True
-        )
+        if mode in ["train", "test"]:
+            return torchvision.datasets.CIFAR10(
+                root="/tmp", train=mode == "train", download=True
+            )
+        elif mode == "ood":
+            return CIFAR10C(
+                data_dir="../nn/data/CIFAR10C",
+                corruption=oo,
+                stage="test",
+                transform=None,
+                target_transform=None,
+            )
+
     elif dataset_name == "cifar100":
         return torchvision.datasets.CIFAR100(
             root="/tmp", train=mode == "train", download=True
@@ -25,11 +59,16 @@ def get_dataset(dataset_name, mode, data_path):
 
 
 def create_beton(args):
-    dataset = get_dataset(args.dataset_name, args.mode, args.data_path)
+    dataset = get_dataset(args.dataset_name, args.mode, args.data_path, args.oo)
 
-    write_path = os.path.join(
-        args.write_path, args.dataset_name, args.mode, f"{args.mode}_{args.res}.beton"
-    )
+    if args.oo is not None:
+        write_path = os.path.join(
+            args.write_path, args.dataset_name, args.mode, args.oo, f"{args.mode}_{args.oo}_{args.res}.beton"
+        )
+    else:
+        write_path = os.path.join(
+            args.write_path, args.dataset_name, args.mode, f"{args.mode}_{args.res}.beton"
+        )
 
     os.makedirs(os.path.dirname(write_path), exist_ok=True)
 
@@ -55,6 +94,8 @@ if __name__ == "__main__":
         help="path to dataset if data is given in a hierarchical subfolder structure.",
     )
     parser.add_argument("--mode", type=str, default="train", help="train or test")
+    parser.add_argument(
+        "--oo", type=str, default=None, help="corruption type for OOD dataset"
     parser.add_argument("--res", type=int, default=32, help="resolution of images")
     parser.add_argument(
         "--write_path",
